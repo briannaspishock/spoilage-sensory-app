@@ -352,21 +352,41 @@ with tab_sens:
             st.plotly_chart(fig_line, use_container_width=True, key="sens_lines")
         else:
             st.info("No sensory columns found to render a time series.")
+          
+    # ---------- Smell guidance (per item) ----------
+st.markdown("##### 🧭 Smell guidance (per item)")
 
-    # ---------- Smell guidance (per-item dropdown) ----------
-    st.markdown("##### 🧭 Smell guidance (per item)")
-    # simple rule set driven by model probability (pred_score)
-    def guidance_from_prob(p):
-        if p >= 0.80: return "⚠️ High risk — watch for **fermented**, **rancid**, **cheesy**, or **sulfurous** notes."
-        if p >= 0.50: return "⚠️ Elevated risk — **fermented** / **rancid** may emerge soon."
-        return "🧊 Low risk — expect faint **sweet/ethereal**, mild **fermented** aroma."
+def guidance_from_prob(p: float) -> str:
+    if p >= 0.80:
+        return "⚠️ High risk — watch for **fermented**, **rancid**, **cheesy**, or **sulfurous** notes."
+    if p >= 0.50:
+        return "⚠️ Elevated risk — **fermented** / **rancid** may emerge soon."
+    return "🧊 Low risk — expect faint **sweet/ethereal**, mild **fermented** aroma."
 
-    item_labels = df_raw.get(ITEM_COL, df_raw.index.astype(str)).astype(str).tolist()
-    pick = st.selectbox("Choose an item", item_labels, index=0, key="smell_pick")
-    idx = df_raw.index[df_raw.get(ITEM_COL, df_raw.index).astype(str) == pick][0]
-    st.write(guidance_from_prob(float(pred_score[idx])))
+# pull scores safely (fallback to zeros if unavailable)
+scores = st.session_state.get("pred_score", np.zeros(len(df_raw)))
 
-    # Optional: table of all items, collapsed by default
+# build options from your item column (or row index)
+labels_series = df_raw.get(ITEM_COL, df_raw.index.astype(str)).astype(str)
+options = list(labels_series)
+pick = st.selectbox("Choose an item", options, index=0, key="smell_pick")
+
+# robust index resolution (handles typed text / no match)
+match_idx = np.where(labels_series.values == str(pick))[0]
+idx = int(match_idx[0]) if len(match_idx) else 0
+
+st.write(guidance_from_prob(float(scores[idx])))
+
+with st.expander("Show smell guidance for all items"):
+    dd = pd.DataFrame({
+        "Item": labels_series,
+        "Product Type": df_raw.get(PTYPE_COL, ""),
+        "Prediction": np.where(scores >= 0.50, "not-safe", "safe"),
+        "Prob (not-safe)": np.round(scores, 3),
+        "Guidance": [guidance_from_prob(float(p)) for p in scores]
+    })
+    st.dataframe(dd, use_container_width=True)
+ collapsed by default
     with st.expander("Show smell guidance for all items"):
         dd = pd.DataFrame({
             "Item": df_raw.get(ITEM_COL, ""),
