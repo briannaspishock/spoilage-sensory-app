@@ -52,7 +52,6 @@ h1,h2,h3,h4,p,span,div {
 
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-thumb { background-color: #e75480; border-radius: 10px; }
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -80,9 +79,13 @@ st.title("🥩🍖 Microbe-Driven Spoilage")
 with st.sidebar:
     st.header("📁 Artifacts & Data")
 
-    # Always look for artifacts inside the repo (works on Streamlit Cloud)
+    # Default artifacts path: repo/artifacts (works on Streamlit Cloud)
     default_artifacts = str((Path(__file__).parent / "artifacts").resolve())
-    artifacts_dir_str = st.text_input("Artifacts folder", value=default_artifacts, help="Contains rf_model_tuned.joblib and model_meta.json")
+    artifacts_dir_str = st.text_input(
+        "Artifacts folder",
+        value=default_artifacts,
+        help="Must contain rf_model_tuned.joblib, model_meta.json, rf_feature_importances.csv",
+    )
 
     st.markdown("**Upload CSV (same schema as model training)**")
     csv_file = st.file_uploader(" ", type=["csv"])
@@ -102,7 +105,7 @@ with st.sidebar:
 # ------------------ LOAD ARTIFACTS ------------------
 artifacts_dir = Path(artifacts_dir_str).expanduser()
 
-# <<< CHANGED required file list for new RF files >>>
+# <<< required files for the RF build >>>
 need = ["rf_model_tuned.joblib", "model_meta.json", "rf_feature_importances.csv"]
 if not artifacts_dir.exists() or any(not (artifacts_dir / f).exists() for f in need):
     st.warning(f"Pick a valid artifacts folder containing: {need}")
@@ -110,7 +113,6 @@ if not artifacts_dir.exists() or any(not (artifacts_dir / f).exists() for f in n
 
 @st.cache_resource
 def load_artifacts(folder: Path):
-    # <<< CHANGED model filename >>>
     clf = joblib.load(folder / "rf_model_tuned.joblib")  # RF classifier
     meta = json.loads((folder / "model_meta.json").read_text())
     return clf, meta
@@ -121,82 +123,115 @@ except Exception as e:
     st.error(f"Failed to load artifacts: {e}")
     st.stop()
 
-feature_names = meta.get("feature_names", [])
-GT_THRESHOLD = float(meta.get("threshold_cfu", 7.0))
+# Globals / defaults
 LOG_CFU_COL = "Total mesophilic aerobic flora (log10 CFU.g-1)"  # With period
+GT_THRESHOLD = float(meta.get("threshold_cfu", 7.0))
 PALETTE = ["#d5b4ab", "#c3b1e1", "#a3c1da", "#a8c69f", "#f4c2c2"]
 prob_thr = 0.50
 
+# ---------------- DATA INPUT ----------------
+if csv_file is None:
+    st.info("Upload a CSV in the sidebar to generate predictions, performance metrics, microbiome views, and sensory guidance.")
+    st.stop()
 
-# ------------------ TABS ------------------
+try:
+    df_raw = pd.read_csv(csv_file)
+except Exception as e:
+    st.error(f"Could not read CSV: {e}")
+    st.stop()
+
+# ---------------- FEATURE NAME RESOLUTION ----------------
+def resolve_feature_names(meta: dict, clf, df: pd.DataFrame) -> list:
+    # 1) From model_meta.json
+    if isinstance(meta.get("feature_names", None), (list, tuple)):
+        return list(meta["feature_names"])
+    # 2) From fitted sklearn model
+    if hasattr(clf, "feature_names_in_"):
+        return list(clf.feature_names_in_)
+    # 3) Fallback: infer numeric columns from CSV (drop obvious non-features)
+    drop_cols = {
+        "Sample_Name_y", "EnvType", "Item", "Product Type",
+        "Day_numeric", "Days_Numeric", LOG_CFU_COL
+    }
+    cand = [
+        c for c in df.columns
+        if c not in drop_cols and np.issubdtype(df[c].dtype, np.number)
+    ]
+    return cand
+
+feature_names = resolve_feature_names(meta, clf, df_raw)
+if not feature_names:
+    st.error("No usable feature list found in meta/model; couldn’t infer from the CSV.")
+    st.stop()
+
+# ---------------- COLUMN ALIASES ----------------
+ITEM_COL = "Sample_Name_y"
+PTYPE_COL = "EnvType"
+DAY_COL = "Day_numeric" if "Day_numeric" in df_raw.columns else ("Days_Numeric" if "Days_Numeric" in df_raw.columns else None)
+
+# ---------------- CORE PREDICTIONS (compute once) ----------------
+X = df_raw.reindex(columns=feature_names, fill_value=0)
+for c in X.columns:
+    if not np.issubdtype(X[c].dtype, np.number):
+        X[c] = pd.to_numeric(X[c], errors="coerce")
+X = X.fillna(0.0)
+
+try:
+    pred_score = clf.predict_proba(X)[:, 1]   # prob of class "not-safe"
+except Exception as e:
+    st.error(f"Failed to get predictions from your model: {e}")
+    st.stop()
+
+pred_class = np.where(pred_score >= prob_thr, "not-safe", "safe")
+
+# Confidence for the predicted class
+safe_conf = (prob_thr - pred_score) / prob_thr
+notsafe_conf = (pred_score - prob_thr) / (1.0 - prob_thr)
+confidence = np.clip(np.nan_to_num(np.where(pred_class == "safe", safe_conf, notsafe_conf)), 0.0, 1.0)
+
+# also expose score for other tabs
+st.session_state["pred_score"] = pred_score
+
+# ---------------- TABS ----------------
 tab_pred, tab_perf, tab_micro, tab_sens = st.tabs(["🔮 Predictions", "📊 Performance", "🧬 Microbiome", "👃 Sensory"])
 
-# ---------- PREDICTIONS ----------
 # ====== PREDICTIONS ======
+def style_predictions(row):
+    """Apply background colors to Prediction and Confidence columns."""
+    styles = [''] * len(row)
+    pred_val = str(row.get("Prediction", "")).lower()
+    style_str = ''
+    if pred_val in ['not-safe', 'unsafe']:
+        style_str = 'background-color: #fde8e8; color: #9b1c1c; font-weight:600;'
+    elif pred_val in ['safe', 'low risk']:
+        style_str = 'background-color: #e8f5e9; color: #1b5e20; font-weight:600;'
+    try:
+        p_idx = row.index.get_loc('Prediction')
+        styles[p_idx] = style_str
+        if 'Confidence' in row.index:
+            c_idx = row.index.get_loc('Confidence')
+            styles[c_idx] = style_str
+    except KeyError:
+        pass
+    return styles
+
 with tab_pred:
     st.markdown("### 📊 Predictions from your Model")
 
-    # --- compute scores once (uses the RF 'clf' we loaded above) ---
-    X = df_raw.reindex(columns=feature_names, fill_value=0)
-    for c in X.columns:
-        if not np.issubdtype(X[c].dtype, np.number):
-            X[c] = pd.to_numeric(X[c], errors="coerce")
-    X = X.fillna(0.0)
-
-    try:
-        pred_score = clf.predict_proba(X)[:, 1]   # prob of class "not-safe"
-    except Exception as e:
-        st.error(f"Failed to get predictions from your model: {e}")
-        st.stop()
-
-    pred_class = np.where(pred_score >= prob_thr, "not-safe", "safe")
-
-    # Confidence for the predicted class
-    safe_conf = (prob_thr - pred_score) / prob_thr
-    notsafe_conf = (pred_score - prob_thr) / (1.0 - prob_thr)
-    confidence_score = np.where(pred_class == "safe", safe_conf, notsafe_conf)
-    confidence_score = np.nan_to_num(confidence_score, nan=0.0)
-    confidence_score = np.clip(confidence_score, 0.0, 1.0)
-
-    # Column mapping (don’t error if a column is missing)
-    ITEM_COL = "Sample_Name_y"
-    PTYPE_COL = "EnvType"
-    DAY_COL = "Day_numeric" if "Day_numeric" in df_raw.columns else ("Days_Numeric" if "Days_Numeric" in df_raw.columns else None)
-
-    # --- style helper from your old app ---
-    def style_predictions(row):
-        styles = [''] * len(row)
-        pred_val = row.get('Prediction', '')
-        style_str = ''
-        if pred_val == 'not-safe':
-            style_str = 'background-color: #fde8e8; color: #9b1c1c;'
-        elif pred_val == 'safe':
-            style_str = 'background-color: #e8f5e9; color: #1b5e20;'
-        try:
-            p_idx = row.index.get_loc('Prediction')
-            styles[p_idx] = style_str
-            if 'Confidence' in row.index:
-                c_idx = row.index.get_loc('Confidence')
-                styles[c_idx] = style_str
-        except KeyError:
-            pass
-        return styles
-
-    # --- build display table exactly like the old app ---
     disp = pd.DataFrame({
-        "Days in Refrigerator": df_raw[DAY_COL] if DAY_COL else "",
-        "Item": df_raw[ITEM_COL] if ITEM_COL in df_raw.columns else "",
-        "Product Type": df_raw[PTYPE_COL] if PTYPE_COL in df_raw.columns else "",
+        "Days in Refrigerator": df_raw.get(DAY_COL, ""),
+        "Item": df_raw.get(ITEM_COL, ""),
+        "Product Type": df_raw.get(PTYPE_COL, ""),
         "Prediction": pred_class,
-        "Confidence": confidence_score,
+        "Confidence": confidence,
     })
-
     formatters = {"Confidence": "{:.1%}"}
+
     if LOG_CFU_COL in df_raw.columns:
         disp["Log CFU (Input)"] = df_raw[LOG_CFU_COL]
         formatters["Log CFU (Input)"] = "{:.2f}"
 
-    # NOTE: st.table preserves Styler colors; st.dataframe ignores Styler.
+    # Use st.table to preserve Styler cell colors (st.dataframe ignores Styler)
     st.table(
         disp.style
             .apply(style_predictions, axis=1)
@@ -210,11 +245,10 @@ with tab_pred:
         "text/csv"
     )
 
-
-# ---------- PERFORMANCE ----------
+# ====== PERFORMANCE ======
 with tab_perf:
     st.markdown("#### 📈 Performance")
-    st.caption("Compares predicted labels with ground-truth CFU values (≥ 7 = not-safe). No per-sample labels shown here.")
+    st.caption("Compares predicted outputs with ground-truth CFU values (≥ 7 = not-safe).")
 
     if LOG_CFU_COL not in df_raw.columns:
         st.warning(f"Ground truth column '{LOG_CFU_COL}' not found — metrics unavailable.")
@@ -232,7 +266,7 @@ with tab_perf:
         fig_cm.update_layout(title="Confusion Matrix", coloraxis_showscale=False)
         st.plotly_chart(fig_cm, use_container_width=True)
 
-# ---------- MICROBIOME ----------
+# ====== MICROBIOME ======
 with tab_micro:
     st.markdown("#### 🧫 Microbiome Relative Abundance")
     st.caption("Shows composition by sample. If your file lacks numeric abundance columns, this view will be empty.")
@@ -270,13 +304,14 @@ with tab_micro:
             st.markdown("**Top microbes (this sample)**")
             st.dataframe(df_top, use_container_width=True)
 
-# ---------- SENSORY ----------
+# ====== SENSORY ======
 with tab_sens:
     st.markdown("#### 👃 Sensory")
     st.caption("If the CSV includes sensory columns, they’re plotted directly. Otherwise a generalized early➜late pattern is shown. No safety labels here.")
 
-    # 1) Smell guidance (per item) — uses probability only (no safe/not-safe wording)
+    # Smell guidance (per item) — probability only (no 'safe/not-safe' wording)
     st.markdown("##### 🧭 Smell guidance (per item)")
+
     def guidance_from_prob(p: float) -> str:
         if p >= 0.80:
             return "⚠️ High risk — watch for **fermented**, **rancid**, **cheesy**, or **sulfurous** notes."
@@ -298,10 +333,9 @@ with tab_sens:
             "Prob (not-safe)": np.round(scores, 3),
             "Guidance": [guidance_from_prob(float(p)) for p in scores]
         })
-        # No "Prediction" column here (labels are only on Predictions tab)
         st.dataframe(dd, use_container_width=True)
 
-    # 2) Always show an Early vs Late bar (generalized template)
+    # Early vs Late (generalized template)
     st.markdown("##### Early vs Late (generalized)")
     bar_template = pd.DataFrame({
         "Descriptor": ["Etheral","Fermented","Old_cheese","Prickly","Rancid","Sulfurous"],
