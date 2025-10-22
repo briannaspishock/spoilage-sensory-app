@@ -198,7 +198,7 @@ tab_pred, tab_perf, tab_micro, tab_sens = st.tabs(["🔮 Predictions", "📊 Per
 # ====== PREDICTIONS ======
 # ====== PREDICTIONS (scrollable + colored cells) ======
 with tab_pred:
-    st.markdown("### 📊 Predictions from your Model")
+    st.markdown("### 📊 Predictions from Model")
 
     # -------- base table from computed outputs --------
     disp = pd.DataFrame({
