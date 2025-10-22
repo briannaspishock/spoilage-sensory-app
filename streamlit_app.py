@@ -89,7 +89,7 @@ with st.sidebar:
 
     st.markdown("### ⚙️ Settings")
     st.markdown("**Classification threshold:** **0.50**")
-    st.caption("Used for classification, performance summaries, sensory grouping, and microbiome summaries.")
+    st.caption("Used for classification and metrics; labels are shown only on the Predictions tab.")
 
     st.markdown(
         """
@@ -141,7 +141,7 @@ DAY_COL = "Day_numeric" if "Day_numeric" in df_raw.columns else ("Days_Numeric" 
 LOG_CFU_COL = "Total mesophilic aerobic flora (log10 CFU.g-1)"
 SENSORY_COLS = [c for c in ["Etheral", "Fermented", "Prickly", "Rancid", "Sulfurous", "Old_cheese"] if c in df_raw.columns]
 
-# ------------------ PREDICTIONS ------------------
+# ------------------ PREDICTIONS (computed once) ------------------
 X = df_raw.reindex(columns=feature_names, fill_value=0)
 for c in X.columns:
     if not np.issubdtype(X[c].dtype, np.number):
@@ -166,29 +166,18 @@ confidence = np.clip(np.nan_to_num(np.where(pred_class == "safe", safe_conf, not
 tab_pred, tab_perf, tab_micro, tab_sens = st.tabs(["🔮 Predictions", "📊 Performance", "🧬 Microbiome", "👃 Sensory"])
 
 # ---------- PREDICTIONS ----------
-def style_predictions(row):
-    """Apply background colors to Prediction and Confidence columns."""
-    styles = [''] * len(row)
-    pred_val = row.get("Prediction", "")
-    
-    if pred_val.lower() in ["unsafe", "not-safe"]:
-        style_str = 'background-color: #fde8e8; color: #9b1c1c; font-weight:600;'
-    elif pred_val.lower() in ["safe", "low risk"]:
-        style_str = 'background-color: #e8f5e9; color: #1b5e20; font-weight:600;'
-    else:
-        style_str = ''
+def color_pred(val: str):
+    v = str(val).lower()
+    if v in ("unsafe", "not-safe"):
+        return "background-color:#fde8e8; color:#9b1c1c; font-weight:600;"
+    if v in ("safe", "low risk"):
+        return "background-color:#e8f5e9; color:#1b5e20; font-weight:600;"
+    return ""
 
-    try:
-        pred_idx = row.index.get_loc('Prediction')
-        styles[pred_idx] = style_str
-        if 'Confidence' in row.index:
-            conf_idx = row.index.get_loc('Confidence')
-            styles[conf_idx] = style_str
-    except KeyError:
-        pass
-    
-    return styles
-
+HEADER_STYLE = [{"selector": "th",
+                 "props": [("background-color", "#ffeef8"),
+                           ("color", "#4d004d"),
+                           ("font-weight", "700")]}]
 
 with tab_pred:
     st.markdown("#### 🔍 Predictions")
@@ -204,37 +193,20 @@ with tab_pred:
     if LOG_CFU_COL in df_raw.columns:
         disp["Log CFU (Input)"] = df_raw[LOG_CFU_COL]
 
-# ---- color helpers ----
-def color_pred(val: str):
-    v = str(val).lower()
-    if v in ("unsafe", "not-safe"):
-        return "background-color:#fde8e8; color:#9b1c1c; font-weight:600;"
-    if v in ("safe", "low risk"):
-        return "background-color:#e8f5e9; color:#1b5e20; font-weight:600;"
-    return ""
-
-# optional: header tint to match theme
-HEADER_STYLE = [{"selector": "th",
-                 "props": [("background-color", "#ffeef8"),
-                           ("color", "#4d004d"),
-                           ("font-weight", "700")]}]
-
-fmt = {"Confidence": "{:.0%}"} if "Confidence" in disp.columns else {}
-
-styler = (
-    disp.style
-        .applymap(color_pred, subset=["Prediction"])     # <-- key change
-        .format(fmt)
-        .set_table_styles(HEADER_STYLE)
-)
-
-st.dataframe(styler, use_container_width=True, height=520)
-
+    fmt = {"Confidence": "{:.0%}"} if "Confidence" in disp.columns else {}
+    styler = (
+        disp.style
+            .applymap(color_pred, subset=["Prediction"])
+            .format(fmt)
+            .set_table_styles(HEADER_STYLE)
+    )
+    # Note: st.table supports Styler; st.dataframe ignores it. Use st.table for styling.
+    st.table(styler)
 
 # ---------- PERFORMANCE ----------
 with tab_perf:
     st.markdown("#### 📈 Performance")
-    st.caption("Compares predicted labels with ground-truth CFU values (≥ 7 = not-safe).")
+    st.caption("Compares predicted labels with ground-truth CFU values (≥ 7 = not-safe). No per-sample labels shown here.")
 
     if LOG_CFU_COL not in df_raw.columns:
         st.warning(f"Ground truth column '{LOG_CFU_COL}' not found — metrics unavailable.")
@@ -290,38 +262,13 @@ with tab_micro:
             st.markdown("**Top microbes (this sample)**")
             st.dataframe(df_top, use_container_width=True)
 
-        # High- vs low-risk taxa tables
-        st.markdown("### Top taxa by predicted risk")
-        scores = st.session_state.get("pred_score", np.zeros(len(df_raw)))
-        high_mask = scores >= prob_thr
-        low_mask  = ~high_mask
-
-        rel_high = rel_abund[high_mask].mean().sort_values(ascending=False).head(10) * 100.0 if high_mask.any() else pd.Series(dtype=float)
-        rel_low  = rel_abund[low_mask].mean().sort_values(ascending=False).head(10) * 100.0 if low_mask.any()  else pd.Series(dtype=float)
-
-        cA, cB = st.columns(2)
-        with cA:
-            st.markdown(f"**Top 10 taxa — High-risk (prob ≥ {prob_thr:.2f})**")
-            st.dataframe(
-                rel_high.rename("Mean_RelAbund_%").reset_index().rename(columns={"index":"Taxon"}) if not rel_high.empty else pd.DataFrame(),
-                use_container_width=True,
-            )
-        with cB:
-            st.markdown(f"**Top 10 taxa — Low-risk (prob < {prob_thr:.2f})**")
-            st.dataframe(
-                rel_low.rename("Mean_RelAbund_%").reset_index().rename(columns={"index":"Taxon"}) if not rel_low.empty else pd.DataFrame(),
-                use_container_width=True,
-            )
-
 # ---------- SENSORY ----------
 with tab_sens:
     st.markdown("#### 👃 Sensory")
-    st.caption("If the CSV includes sensory columns, they’re plotted directly. Otherwise a generalized early➜late pattern is shown.")
+    st.caption("If the CSV includes sensory columns, they’re plotted directly. Otherwise a generalized early➜late pattern is shown. No safety labels here.")
 
-
-    # 3) Smell guidance (per item) — session-safe + robust index
+    # 1) Smell guidance (per item) — uses probability only (no safe/not-safe wording)
     st.markdown("##### 🧭 Smell guidance (per item)")
-
     def guidance_from_prob(p: float) -> str:
         if p >= 0.80:
             return "⚠️ High risk — watch for **fermented**, **rancid**, **cheesy**, or **sulfurous** notes."
@@ -340,18 +287,14 @@ with tab_sens:
         dd = pd.DataFrame({
             "Item": labels_series,
             "Product Type": df_raw.get(PTYPE_COL, ""),
-            "Prediction": np.where(scores >= prob_thr, "not-safe", "safe"),
             "Prob (not-safe)": np.round(scores, 3),
             "Guidance": [guidance_from_prob(float(p)) for p in scores]
         })
+        # No "Prediction" column here (labels are only on Predictions tab)
         st.dataframe(dd, use_container_width=True)
 
-
-
-    
     # 2) Always show an Early vs Late bar (generalized template)
     st.markdown("##### Early vs Late (generalized)")
-    # these are your clean, readable example profiles
     bar_template = pd.DataFrame({
         "Descriptor": ["Etheral","Fermented","Old_cheese","Prickly","Rancid","Sulfurous"],
         "Early":      [0.5, 1.0, 0.2, 0.45, 0.25, 0.10],
@@ -364,5 +307,3 @@ with tab_sens:
         title=""
     )
     st.plotly_chart(fig_bar, use_container_width=True)
-
-
