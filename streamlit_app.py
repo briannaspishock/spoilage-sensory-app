@@ -181,109 +181,86 @@ HEADER_STYLE = [{"selector": "th",
 
 with tab_pred:
     st.markdown("#### 🔍 Predictions")
-    st.caption("10 rows per page. Prediction cells are color-coded; confidence is for the predicted class.")
+    st.caption("Classification of each uploaded sample as *safe* or *not-safe* with confidence (threshold 0.50).")
 
-    # ---- base table (no extra label col) ----
     disp = pd.DataFrame({
         "Item": df_raw.get(ITEM_COL, ""),
         "Product Type": df_raw.get(PTYPE_COL, ""),
         "Days": df_raw.get(DAY_COL, ""),
         "Prediction": pred_class,
-        "Confidence": (confidence * 100).round(0).astype(int),  # as %
+        "Confidence": confidence
     })
     if LOG_CFU_COL in df_raw.columns:
         disp["Log CFU (Input)"] = df_raw[LOG_CFU_COL]
 
-    # optional ordering (risk-aware)
-    scores = st.session_state.get("pred_score", np.zeros(len(disp)))
-    order = st.selectbox(
-        "Order",
-        ["Original order", "Highest risk first", "Lowest risk first"],
-        index=0,
-        help="Sort by model probability of not-safe."
+    fmt = {"Confidence": "{:.0%}"} if "Confidence" in disp.columns else {}
+    styler = (
+        disp.style
+            .applymap(color_pred, subset=["Prediction"])
+            .format(fmt)
+            .set_table_styles(HEADER_STYLE)
     )
-    if order == "Highest risk first":
-        disp = disp.iloc[np.argsort(-scores)].reset_index(drop=True)
-    elif order == "Lowest risk first":
-        disp = disp.iloc[np.argsort(scores)].reset_index(drop=True)
+    # Note: st.table supports Styler; st.dataframe ignores it. Use st.table for styling.
+    st.table(styler)
 
-    # ---- pagination (10 per page) ----
-    PAGE_SIZE = 10
-    total_pages = max(1, int(np.ceil(len(disp) / PAGE_SIZE)))
-    page = st.selectbox("Page", list(range(1, total_pages + 1)), index=0)
-    start, end = (page - 1) * PAGE_SIZE, (page * PAGE_SIZE)
-    disp_page = disp.iloc[start:end].reset_index(drop=True)
+# ---------- PERFORMANCE ----------
+with tab_perf:
+    st.markdown("#### 📈 Performance")
+    st.caption("Compares predicted labels with ground-truth CFU values (≥ 7 = not-safe). No per-sample labels shown here.")
 
-    st.write(f"Showing items **{start + 1}–{min(end, len(disp))}** of **{len(disp)}**")
+    if LOG_CFU_COL not in df_raw.columns:
+        st.warning(f"Ground truth column '{LOG_CFU_COL}' not found — metrics unavailable.")
+    else:
+        y_true = np.where(df_raw[LOG_CFU_COL] >= GT_THRESHOLD, "not-safe", "safe")
+        y_pred = pred_class
+        labels = ["safe", "not-safe"]
 
-    # ---- HTML table with cell coloring + scroll ----
-    # NOTE: st.markdown with unsafe_allow_html allows us to color just the Prediction cell,
-    # and wrap in a scrollable container for a visible scrollbar.
-    def _row_html(row):
-        pred = str(row["Prediction"]).lower()
-        pred_class = "pred-safe" if pred == "safe" else "pred-unsafe"
-        cells = [
-            f"<td>{row['Item']}</td>",
-            f"<td>{row['Product Type']}</td>",
-            f"<td>{'' if pd.isna(row['Days']) else row['Days']}</td>",
-            f"<td class='{pred_class}'><b>{row['Prediction']}</b></td>",
-            f"<td>{'' if pd.isna(row['Confidence']) else f'{int(row['Confidence'])}%'}</td>",
-        ]
-        if "Log CFU (Input)" in disp_page.columns:
-            cfu_val = row["Log CFU (Input)"]
-            cells.append(f"<td>{'' if pd.isna(cfu_val) else round(float(cfu_val), 2)}</td>")
-        return "<tr>" + "".join(cells) + "</tr>"
+        report = classification_report(y_true, y_pred, labels=labels, output_dict=True, zero_division=0)
+        st.dataframe(pd.DataFrame(report).transpose(), use_container_width=True)
 
-    headers = ["Item", "Product Type", "Days", "Prediction", "Confidence"]
-    if "Log CFU (Input)" in disp_page.columns:
-        headers.append("Log CFU (Input)")
+        cm = confusion_matrix(y_true, y_pred, labels=labels)
+        fig_cm = px.imshow(cm, text_auto=True, labels=dict(x="Predicted", y="True"),
+                           x=labels, y=labels, color_continuous_scale="Reds")
+        fig_cm.update_layout(title="Confusion Matrix", coloraxis_showscale=False)
+        st.plotly_chart(fig_cm, use_container_width=True)
 
-    table_html = [
-        """
-        <style>
-          .pred-table-wrap {
-            max-height: 430px;           /* visible area for ~10 rows */
-            overflow-y: auto;            /* <-- explicit scrollbar */
-            border: 1px solid #f1d7e1;
-            border-radius: 10px;
-            background: #fff9fc;
-          }
-          table.pred-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.95rem;
-          }
-          table.pred-table th, table.pred-table td {
-            padding: 8px 10px;
-            border-bottom: 1px solid #f5e7ee;
-            text-align: left;
-            color: #4d004d;
-            background: #ffffff;
-          }
-          table.pred-table thead th {
-            position: sticky;
-            top: 0;
-            z-index: 1;
-            background: #ffeef8;
-            font-weight: 700;
-          }
-          td.pred-safe   { background:#e8f5e9; color:#1b5e20; border-left: 4px solid #1b5e20; }
-          td.pred-unsafe { background:#fde8e8; color:#9b1c1c; border-left: 4px solid #9b1c1c; }
-        </style>
-        <div class="pred-table-wrap">
-          <table class="pred-table">
-            <thead><tr>
-        """
-    ]
-    table_html += [f"<th>{h}</th>" for h in headers]
-    table_html += ["</tr></thead><tbody>"]
+# ---------- MICROBIOME ----------
+with tab_micro:
+    st.markdown("#### 🧫 Microbiome Relative Abundance")
+    st.caption("Shows composition by sample. If your file lacks numeric abundance columns, this view will be empty.")
 
-    for _, r in disp_page.iterrows():
-        table_html.append(_row_html(r))
+    NON_MICROBE_COLS = {ITEM_COL, PTYPE_COL, DAY_COL, LOG_CFU_COL, "Prediction", "Confidence"}
+    micro_cols = [c for c in df_raw.columns if c not in NON_MICROBE_COLS and np.issubdtype(df_raw[c].dtype, np.number)]
 
-    table_html += ["</tbody></table></div>"]
-    st.markdown("".join(table_html), unsafe_allow_html=True)
+    if not micro_cols:
+        st.info("No numeric microbial columns detected.")
+    else:
+        micro_df = df_raw[micro_cols]
+        row_totals = micro_df.sum(axis=1).replace(0, np.nan)
+        rel_abund = micro_df.div(row_totals, axis=0).fillna(0.0)
 
+        # sample picker
+        labels_series = df_raw.get(ITEM_COL, df_raw.index.astype(str)).astype(str)
+        sel = st.selectbox("Select a sample", list(labels_series), index=0)
+        match_idx = np.where(labels_series.values == str(sel))[0]
+        idx = int(match_idx[0]) if len(match_idx) else 0
+
+        topN = st.slider("Top microbes (N)", 5, 20, 10, 1)
+        series = (rel_abund.iloc[idx].sort_values(ascending=False).head(topN) * 100.0)
+        df_top = series.rename("Relative_Abundance_%").reset_index().rename(columns={"index": "Microbe"})
+
+        left, right = st.columns([2,1], gap="large")
+        with left:
+            fig = px.bar(
+                df_top, x="Microbe", y="Relative_Abundance_%", color="Microbe",
+                color_discrete_sequence=(PALETTE * ((len(df_top)//len(PALETTE))+1))[:len(df_top)],
+                title=f"Top {topN} microbes — {sel}"
+            )
+            fig.update_layout(yaxis_title="Relative abundance (%)", xaxis_title="")
+            st.plotly_chart(fig, use_container_width=True)
+        with right:
+            st.markdown("**Top microbes (this sample)**")
+            st.dataframe(df_top, use_container_width=True)
 
 # ---------- SENSORY ----------
 with tab_sens:
