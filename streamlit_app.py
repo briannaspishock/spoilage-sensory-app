@@ -234,21 +234,6 @@ with tab_sens:
     st.markdown("#### 👃 Sensory")
     st.caption("If the CSV includes sensory columns, they’re plotted directly. Otherwise a generalized early➜late pattern is shown.")
 
-    # 2) Always show an Early vs Late bar (generalized template)
-    st.markdown("##### Early vs Late (generalized)")
-    # these are your clean, readable example profiles
-    bar_template = pd.DataFrame({
-        "Descriptor": ["Etheral","Fermented","Old_cheese","Prickly","Rancid","Sulfurous"],
-        "Early":      [0.5, 1.0, 0.2, 0.45, 0.25, 0.10],
-        "Late":       [1.4, 1.4, 0.55, 1.4, 0.55, 0.50],
-    })
-    df_bar = bar_template.melt(id_vars="Descriptor", var_name="Stage", value_name="Mean intensity")
-    fig_bar = px.bar(
-        df_bar, x="Descriptor", y="Mean intensity", color="Stage",
-        barmode="group", color_discrete_sequence=["#a3c1da","#e75480"],
-        title=""
-    )
-    st.plotly_chart(fig_bar, use_container_width=True)
 
     # 3) Smell guidance (per item) — session-safe + robust index
     st.markdown("##### 🧭 Smell guidance (per item)")
@@ -276,3 +261,24 @@ with tab_sens:
             "Guidance": [guidance_from_prob(float(p)) for p in scores]
         })
         st.dataframe(dd, use_container_width=True)
+
+
+
+    
+    # 2) Always show an Early vs Late bar (generalized template)
+    st.markdown("##### Early vs Late (generalized)")
+    # these are your clean, readable example profiles
+    bar_template = pd.DataFrame({
+        "Descriptor": ["Etheral","Fermented","Old_cheese","Prickly","Rancid","Sulfurous"],
+        "Early":      [0.5, 1.0, 0.2, 0.45, 0.25, 0.10],
+        "Late":       [1.4, 1.4, 0.55, 1.4, 0.55, 0.50],
+    })
+    df_bar = bar_template.melt(id_vars="Descriptor", var_name="Stage", value_name="Mean intensity")
+    fig_bar = px.bar(
+        df_bar, x="Descriptor", y="Mean intensity", color="Stage",
+        barmode="group", color_discrete_sequence=["#a3c1da","#e75480"],
+        title=""
+    )
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+
