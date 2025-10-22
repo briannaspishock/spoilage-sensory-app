@@ -232,18 +232,81 @@ with tab_pred:
         formatters["Log CFU (Input)"] = "{:.2f}"
 
     # Use st.table to preserve Styler cell colors (st.dataframe ignores Styler)
-    st.table(
-        disp.style
-            .apply(style_predictions, axis=1)
-            .format(formatters)
-    )
+# --- HTML table with scrollable container ---
+def row_html(row):
+    pred = str(row["Prediction"]).lower()
+    color = "#e8f5e9" if pred == "safe" else "#fde8e8"
+    text_color = "#1b5e20" if pred == "safe" else "#9b1c1c"
+    conf = f"{row['Confidence']*100:.1f}%" if not pd.isna(row['Confidence']) else ""
+    cfu_val = f"{row['Log CFU (Input)']:.2f}" if 'Log CFU (Input)' in row and not pd.isna(row['Log CFU (Input)']) else ""
+    return f"""
+      <tr>
+        <td>{row['Days in Refrigerator']}</td>
+        <td>{row['Item']}</td>
+        <td>{row['Product Type']}</td>
+        <td style="background:{color};color:{text_color};font-weight:600;">{row['Prediction']}</td>
+        <td style="background:{color};color:{text_color};font-weight:600;">{conf}</td>
+        <td>{cfu_val}</td>
+      </tr>
+    """
 
-    st.download_button(
-        "⬇️ Download predictions as CSV",
-        disp.to_csv(index=False).encode("utf-8"),
-        "spoilage_predictions.csv",
-        "text/csv"
-    )
+rows_html = "\n".join(row_html(r) for _, r in disp.iterrows())
+
+table_html = f"""
+<style>
+  .pred-table-wrap {{
+    max-height: 420px;       /* adjust for visible rows */
+    overflow-y: auto;        /* <-- scroll bar appears */
+    border: 1px solid #f3d7e4;
+    border-radius: 10px;
+    background: #fff9fc;
+  }}
+  table.pred-table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+  }}
+  th, td {{
+    border-bottom: 1px solid #f5e7ee;
+    padding: 8px 10px;
+    text-align: left;
+    color: #4d004d;
+  }}
+  thead th {{
+    position: sticky;
+    top: 0;
+    background: #ffeef8;
+    font-weight: 700;
+  }}
+</style>
+<div class="pred-table-wrap">
+  <table class="pred-table">
+    <thead>
+      <tr>
+        <th>Days in Refrigerator</th>
+        <th>Item</th>
+        <th>Product Type</th>
+        <th>Prediction</th>
+        <th>Confidence</th>
+        <th>Log CFU (Input)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows_html}
+    </tbody>
+  </table>
+</div>
+"""
+
+st.markdown(table_html, unsafe_allow_html=True)
+
+# keep the download button below
+st.download_button(
+    "⬇️ Download predictions as CSV",
+    disp.to_csv(index=False).encode("utf-8"),
+    "spoilage_predictions.csv",
+    "text/csv"
+)
 
 # ====== PERFORMANCE ======
 with tab_perf:
