@@ -183,84 +183,63 @@ with tab_pred:
     st.markdown("#### 🔍 Predictions")
     st.caption("Classification of each uploaded sample as *safe* or *not-safe* with confidence (threshold 0.50).")
 
+    # ---- build base table ----
     disp = pd.DataFrame({
         "Item": df_raw.get(ITEM_COL, ""),
         "Product Type": df_raw.get(PTYPE_COL, ""),
         "Days": df_raw.get(DAY_COL, ""),
         "Prediction": pred_class,
-        "Confidence": confidence
+        "Confidence": confidence,                 # 0–1
     })
     if LOG_CFU_COL in df_raw.columns:
         disp["Log CFU (Input)"] = df_raw[LOG_CFU_COL]
 
-    fmt = {"Confidence": "{:.0%}"} if "Confidence" in disp.columns else {}
-    styler = (
-        disp.style
-            .applymap(color_pred, subset=["Prediction"])
-            .format(fmt)
-            .set_table_styles(HEADER_STYLE)
+    # Add a simple visual label (works in st.dataframe)
+    disp["Label"] = np.where(disp["Prediction"] == "not-safe", "🟥 not-safe", "🟩 safe")
+    # Put Label next to Prediction
+    cols = ["Item","Product Type","Days","Prediction","Label","Confidence"] + ([ "Log CFU (Input)"] if "Log CFU (Input)" in disp.columns else [])
+    disp = disp[cols]
+
+    # ---- ordering & pagination controls ----
+    c1, c2 = st.columns([2, 1], gap="small")
+    with c1:
+        order = st.selectbox(
+            "Order",
+            ["Original order", "Highest risk first", "Lowest risk first"],
+            index=0,
+            help="Sort by model probability of not-safe."
+        )
+    # compute risk scores for sorting
+    scores = st.session_state.get("pred_score", np.zeros(len(disp)))
+    if order == "Highest risk first":
+        disp = disp.iloc[np.argsort(-scores)].reset_index(drop=True)
+    elif order == "Lowest risk first":
+        disp = disp.iloc[np.argsort(scores)].reset_index(drop=True)
+
+    PAGE_SIZE = 10
+    total_pages = max(1, int(np.ceil(len(disp) / PAGE_SIZE)))
+    with c2:
+        page = st.selectbox("Page (10 per page)", list(range(1, total_pages + 1)), index=0)
+
+    start = (page - 1) * PAGE_SIZE
+    end = start + PAGE_SIZE
+    disp_page = disp.iloc[start:end].reset_index(drop=True)
+
+    st.write(f"Showing items **{start + 1}–{min(end, len(disp))}** of **{len(disp)}**")
+
+    # ---- render (scrollable) ----
+    # Use st.dataframe for scrollability; format confidence as percent
+    st.dataframe(
+        disp_page,
+        use_container_width=True,
+        height=420,  # ~10 rows visible; table is scrollable if needed
+        column_config={
+            "Confidence": st.column_config.NumberColumn(format="%.0f%%", help="Model confidence for the predicted class", step=1),
+            "Days": st.column_config.NumberColumn(),
+            "Log CFU (Input)": st.column_config.NumberColumn() if "Log CFU (Input)" in disp_page.columns else None,
+        }
     )
-    # Note: st.table supports Styler; st.dataframe ignores it. Use st.table for styling.
-    st.table(styler)
 
-# ---------- PERFORMANCE ----------
-with tab_perf:
-    st.markdown("#### 📈 Performance")
-    st.caption("Compares predicted labels with ground-truth CFU values (≥ 7 = not-safe). No per-sample labels shown here.")
-
-    if LOG_CFU_COL not in df_raw.columns:
-        st.warning(f"Ground truth column '{LOG_CFU_COL}' not found — metrics unavailable.")
-    else:
-        y_true = np.where(df_raw[LOG_CFU_COL] >= GT_THRESHOLD, "not-safe", "safe")
-        y_pred = pred_class
-        labels = ["safe", "not-safe"]
-
-        report = classification_report(y_true, y_pred, labels=labels, output_dict=True, zero_division=0)
-        st.dataframe(pd.DataFrame(report).transpose(), use_container_width=True)
-
-        cm = confusion_matrix(y_true, y_pred, labels=labels)
-        fig_cm = px.imshow(cm, text_auto=True, labels=dict(x="Predicted", y="True"),
-                           x=labels, y=labels, color_continuous_scale="Reds")
-        fig_cm.update_layout(title="Confusion Matrix", coloraxis_showscale=False)
-        st.plotly_chart(fig_cm, use_container_width=True)
-
-# ---------- MICROBIOME ----------
-with tab_micro:
-    st.markdown("#### 🧫 Microbiome Relative Abundance")
-    st.caption("Shows composition by sample. If your file lacks numeric abundance columns, this view will be empty.")
-
-    NON_MICROBE_COLS = {ITEM_COL, PTYPE_COL, DAY_COL, LOG_CFU_COL, "Prediction", "Confidence"}
-    micro_cols = [c for c in df_raw.columns if c not in NON_MICROBE_COLS and np.issubdtype(df_raw[c].dtype, np.number)]
-
-    if not micro_cols:
-        st.info("No numeric microbial columns detected.")
-    else:
-        micro_df = df_raw[micro_cols]
-        row_totals = micro_df.sum(axis=1).replace(0, np.nan)
-        rel_abund = micro_df.div(row_totals, axis=0).fillna(0.0)
-
-        # sample picker
-        labels_series = df_raw.get(ITEM_COL, df_raw.index.astype(str)).astype(str)
-        sel = st.selectbox("Select a sample", list(labels_series), index=0)
-        match_idx = np.where(labels_series.values == str(sel))[0]
-        idx = int(match_idx[0]) if len(match_idx) else 0
-
-        topN = st.slider("Top microbes (N)", 5, 20, 10, 1)
-        series = (rel_abund.iloc[idx].sort_values(ascending=False).head(topN) * 100.0)
-        df_top = series.rename("Relative_Abundance_%").reset_index().rename(columns={"index": "Microbe"})
-
-        left, right = st.columns([2,1], gap="large")
-        with left:
-            fig = px.bar(
-                df_top, x="Microbe", y="Relative_Abundance_%", color="Microbe",
-                color_discrete_sequence=(PALETTE * ((len(df_top)//len(PALETTE))+1))[:len(df_top)],
-                title=f"Top {topN} microbes — {sel}"
-            )
-            fig.update_layout(yaxis_title="Relative abundance (%)", xaxis_title="")
-            st.plotly_chart(fig, use_container_width=True)
-        with right:
-            st.markdown("**Top microbes (this sample)**")
-            st.dataframe(df_top, use_container_width=True)
 
 # ---------- SENSORY ----------
 with tab_sens:
