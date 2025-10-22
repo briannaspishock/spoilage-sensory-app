@@ -181,64 +181,108 @@ HEADER_STYLE = [{"selector": "th",
 
 with tab_pred:
     st.markdown("#### 🔍 Predictions")
-    st.caption("Classification of each uploaded sample as *safe* or *not-safe* with confidence (threshold 0.50).")
+    st.caption("10 rows per page. Prediction cells are color-coded; confidence is for the predicted class.")
 
-    # ---- build base table ----
+    # ---- base table (no extra label col) ----
     disp = pd.DataFrame({
         "Item": df_raw.get(ITEM_COL, ""),
         "Product Type": df_raw.get(PTYPE_COL, ""),
         "Days": df_raw.get(DAY_COL, ""),
         "Prediction": pred_class,
-        "Confidence": confidence,                 # 0–1
+        "Confidence": (confidence * 100).round(0).astype(int),  # as %
     })
     if LOG_CFU_COL in df_raw.columns:
         disp["Log CFU (Input)"] = df_raw[LOG_CFU_COL]
 
-    # Add a simple visual label (works in st.dataframe)
-    disp["Label"] = np.where(disp["Prediction"] == "not-safe", "🟥 not-safe", "🟩 safe")
-    # Put Label next to Prediction
-    cols = ["Item","Product Type","Days","Prediction","Label","Confidence"] + ([ "Log CFU (Input)"] if "Log CFU (Input)" in disp.columns else [])
-    disp = disp[cols]
-
-    # ---- ordering & pagination controls ----
-    c1, c2 = st.columns([2, 1], gap="small")
-    with c1:
-        order = st.selectbox(
-            "Order",
-            ["Original order", "Highest risk first", "Lowest risk first"],
-            index=0,
-            help="Sort by model probability of not-safe."
-        )
-    # compute risk scores for sorting
+    # optional ordering (risk-aware)
     scores = st.session_state.get("pred_score", np.zeros(len(disp)))
+    order = st.selectbox(
+        "Order",
+        ["Original order", "Highest risk first", "Lowest risk first"],
+        index=0,
+        help="Sort by model probability of not-safe."
+    )
     if order == "Highest risk first":
         disp = disp.iloc[np.argsort(-scores)].reset_index(drop=True)
     elif order == "Lowest risk first":
         disp = disp.iloc[np.argsort(scores)].reset_index(drop=True)
 
+    # ---- pagination (10 per page) ----
     PAGE_SIZE = 10
     total_pages = max(1, int(np.ceil(len(disp) / PAGE_SIZE)))
-    with c2:
-        page = st.selectbox("Page (10 per page)", list(range(1, total_pages + 1)), index=0)
-
-    start = (page - 1) * PAGE_SIZE
-    end = start + PAGE_SIZE
+    page = st.selectbox("Page", list(range(1, total_pages + 1)), index=0)
+    start, end = (page - 1) * PAGE_SIZE, (page * PAGE_SIZE)
     disp_page = disp.iloc[start:end].reset_index(drop=True)
 
     st.write(f"Showing items **{start + 1}–{min(end, len(disp))}** of **{len(disp)}**")
 
-    # ---- render (scrollable) ----
-    # Use st.dataframe for scrollability; format confidence as percent
-    st.dataframe(
-        disp_page,
-        use_container_width=True,
-        height=420,  # ~10 rows visible; table is scrollable if needed
-        column_config={
-            "Confidence": st.column_config.NumberColumn(format="%.0f%%", help="Model confidence for the predicted class", step=1),
-            "Days": st.column_config.NumberColumn(),
-            "Log CFU (Input)": st.column_config.NumberColumn() if "Log CFU (Input)" in disp_page.columns else None,
-        }
-    )
+    # ---- HTML table with cell coloring + scroll ----
+    # NOTE: st.markdown with unsafe_allow_html allows us to color just the Prediction cell,
+    # and wrap in a scrollable container for a visible scrollbar.
+    def _row_html(row):
+        pred = str(row["Prediction"]).lower()
+        pred_class = "pred-safe" if pred == "safe" else "pred-unsafe"
+        cells = [
+            f"<td>{row['Item']}</td>",
+            f"<td>{row['Product Type']}</td>",
+            f"<td>{'' if pd.isna(row['Days']) else row['Days']}</td>",
+            f"<td class='{pred_class}'><b>{row['Prediction']}</b></td>",
+            f"<td>{'' if pd.isna(row['Confidence']) else f'{int(row['Confidence'])}%'}</td>",
+        ]
+        if "Log CFU (Input)" in disp_page.columns:
+            cfu_val = row["Log CFU (Input)"]
+            cells.append(f"<td>{'' if pd.isna(cfu_val) else round(float(cfu_val), 2)}</td>")
+        return "<tr>" + "".join(cells) + "</tr>"
+
+    headers = ["Item", "Product Type", "Days", "Prediction", "Confidence"]
+    if "Log CFU (Input)" in disp_page.columns:
+        headers.append("Log CFU (Input)")
+
+    table_html = [
+        """
+        <style>
+          .pred-table-wrap {
+            max-height: 430px;           /* visible area for ~10 rows */
+            overflow-y: auto;            /* <-- explicit scrollbar */
+            border: 1px solid #f1d7e1;
+            border-radius: 10px;
+            background: #fff9fc;
+          }
+          table.pred-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.95rem;
+          }
+          table.pred-table th, table.pred-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #f5e7ee;
+            text-align: left;
+            color: #4d004d;
+            background: #ffffff;
+          }
+          table.pred-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: #ffeef8;
+            font-weight: 700;
+          }
+          td.pred-safe   { background:#e8f5e9; color:#1b5e20; border-left: 4px solid #1b5e20; }
+          td.pred-unsafe { background:#fde8e8; color:#9b1c1c; border-left: 4px solid #9b1c1c; }
+        </style>
+        <div class="pred-table-wrap">
+          <table class="pred-table">
+            <thead><tr>
+        """
+    ]
+    table_html += [f"<th>{h}</th>" for h in headers]
+    table_html += ["</tr></thead><tbody>"]
+
+    for _, r in disp_page.iterrows():
+        table_html.append(_row_html(r))
+
+    table_html += ["</tbody></table></div>"]
+    st.markdown("".join(table_html), unsafe_allow_html=True)
 
 
 # ---------- SENSORY ----------
