@@ -101,16 +101,19 @@ with st.sidebar:
 
 # ------------------ LOAD ARTIFACTS ------------------
 artifacts_dir = Path(artifacts_dir_str).expanduser()
-need = ["rf_model_tuned.joblib", "model_meta.json"]
+
+# <<< CHANGED required file list for new RF files >>>
+need = ["rf_model_tuned.joblib", "model_meta.json", "rf_feature_importances.csv"]
 if not artifacts_dir.exists() or any(not (artifacts_dir / f).exists() for f in need):
-    st.warning(f"Artifacts not found at: {artifacts_dir}\n\nRequired: {need}")
+    st.warning(f"Pick a valid artifacts folder containing: {need}")
     st.stop()
 
 @st.cache_resource
 def load_artifacts(folder: Path):
-    model = joblib.load(folder / "rf_model_tuned.joblib")
+    # <<< CHANGED model filename >>>
+    clf = joblib.load(folder / "rf_model_tuned.joblib")  # RF classifier
     meta = json.loads((folder / "model_meta.json").read_text())
-    return model, meta
+    return clf, meta
 
 try:
     clf, meta = load_artifacts(artifacts_dir)
@@ -120,88 +123,93 @@ except Exception as e:
 
 feature_names = meta.get("feature_names", [])
 GT_THRESHOLD = float(meta.get("threshold_cfu", 7.0))
+LOG_CFU_COL = "Total mesophilic aerobic flora (log10 CFU.g-1)"  # With period
 PALETTE = ["#d5b4ab", "#c3b1e1", "#a3c1da", "#a8c69f", "#f4c2c2"]
 prob_thr = 0.50
 
-# ------------------ DATA ------------------
-if csv_file is None:
-    st.info("Upload a CSV in the sidebar to generate predictions, performance metrics, microbiome views, and sensory guidance.")
-    st.stop()
-
-try:
-    df_raw = pd.read_csv(csv_file)
-except Exception as e:
-    st.error(f"Could not read CSV: {e}")
-    st.stop()
-
-# column names we reference
-ITEM_COL = "Sample_Name_y"
-PTYPE_COL = "EnvType"
-DAY_COL = "Day_numeric" if "Day_numeric" in df_raw.columns else ("Days_Numeric" if "Days_Numeric" in df_raw.columns else None)
-LOG_CFU_COL = "Total mesophilic aerobic flora (log10 CFU.g-1)"
-SENSORY_COLS = [c for c in ["Etheral", "Fermented", "Prickly", "Rancid", "Sulfurous", "Old_cheese"] if c in df_raw.columns]
-
-# ------------------ PREDICTIONS (computed once) ------------------
-X = df_raw.reindex(columns=feature_names, fill_value=0)
-for c in X.columns:
-    if not np.issubdtype(X[c].dtype, np.number):
-        X[c] = pd.to_numeric(X[c], errors="coerce")
-X = X.fillna(0.0)
-
-try:
-    pred_score = clf.predict_proba(X)[:, 1]
-except Exception as e:
-    st.error(f"Prediction failed: {e}")
-    pred_score = np.zeros(len(X))  # fail-safe
-
-# make scores available across tabs (prevents rerun NameError)
-st.session_state["pred_score"] = pred_score
-
-pred_class = np.where(pred_score >= prob_thr, "not-safe", "safe")
-safe_conf = (prob_thr - pred_score) / prob_thr
-notsafe_conf = (pred_score - prob_thr) / (1.0 - prob_thr)
-confidence = np.clip(np.nan_to_num(np.where(pred_class == "safe", safe_conf, notsafe_conf)), 0.0, 1.0)
 
 # ------------------ TABS ------------------
 tab_pred, tab_perf, tab_micro, tab_sens = st.tabs(["🔮 Predictions", "📊 Performance", "🧬 Microbiome", "👃 Sensory"])
 
 # ---------- PREDICTIONS ----------
-def color_pred(val: str):
-    v = str(val).lower()
-    if v in ("unsafe", "not-safe"):
-        return "background-color:#fde8e8; color:#9b1c1c; font-weight:600;"
-    if v in ("safe", "low risk"):
-        return "background-color:#e8f5e9; color:#1b5e20; font-weight:600;"
-    return ""
-
-HEADER_STYLE = [{"selector": "th",
-                 "props": [("background-color", "#ffeef8"),
-                           ("color", "#4d004d"),
-                           ("font-weight", "700")]}]
-
+# ====== PREDICTIONS ======
 with tab_pred:
-    st.markdown("#### 🔍 Predictions")
-    st.caption("Classification of each uploaded sample as *safe* or *not-safe* with confidence (threshold 0.50).")
+    st.markdown("### 📊 Predictions from your Model")
 
+    # --- compute scores once (uses the RF 'clf' we loaded above) ---
+    X = df_raw.reindex(columns=feature_names, fill_value=0)
+    for c in X.columns:
+        if not np.issubdtype(X[c].dtype, np.number):
+            X[c] = pd.to_numeric(X[c], errors="coerce")
+    X = X.fillna(0.0)
+
+    try:
+        pred_score = clf.predict_proba(X)[:, 1]   # prob of class "not-safe"
+    except Exception as e:
+        st.error(f"Failed to get predictions from your model: {e}")
+        st.stop()
+
+    pred_class = np.where(pred_score >= prob_thr, "not-safe", "safe")
+
+    # Confidence for the predicted class
+    safe_conf = (prob_thr - pred_score) / prob_thr
+    notsafe_conf = (pred_score - prob_thr) / (1.0 - prob_thr)
+    confidence_score = np.where(pred_class == "safe", safe_conf, notsafe_conf)
+    confidence_score = np.nan_to_num(confidence_score, nan=0.0)
+    confidence_score = np.clip(confidence_score, 0.0, 1.0)
+
+    # Column mapping (don’t error if a column is missing)
+    ITEM_COL = "Sample_Name_y"
+    PTYPE_COL = "EnvType"
+    DAY_COL = "Day_numeric" if "Day_numeric" in df_raw.columns else ("Days_Numeric" if "Days_Numeric" in df_raw.columns else None)
+
+    # --- style helper from your old app ---
+    def style_predictions(row):
+        styles = [''] * len(row)
+        pred_val = row.get('Prediction', '')
+        style_str = ''
+        if pred_val == 'not-safe':
+            style_str = 'background-color: #fde8e8; color: #9b1c1c;'
+        elif pred_val == 'safe':
+            style_str = 'background-color: #e8f5e9; color: #1b5e20;'
+        try:
+            p_idx = row.index.get_loc('Prediction')
+            styles[p_idx] = style_str
+            if 'Confidence' in row.index:
+                c_idx = row.index.get_loc('Confidence')
+                styles[c_idx] = style_str
+        except KeyError:
+            pass
+        return styles
+
+    # --- build display table exactly like the old app ---
     disp = pd.DataFrame({
-        "Item": df_raw.get(ITEM_COL, ""),
-        "Product Type": df_raw.get(PTYPE_COL, ""),
-        "Days": df_raw.get(DAY_COL, ""),
+        "Days in Refrigerator": df_raw[DAY_COL] if DAY_COL else "",
+        "Item": df_raw[ITEM_COL] if ITEM_COL in df_raw.columns else "",
+        "Product Type": df_raw[PTYPE_COL] if PTYPE_COL in df_raw.columns else "",
         "Prediction": pred_class,
-        "Confidence": confidence
+        "Confidence": confidence_score,
     })
+
+    formatters = {"Confidence": "{:.1%}"}
     if LOG_CFU_COL in df_raw.columns:
         disp["Log CFU (Input)"] = df_raw[LOG_CFU_COL]
+        formatters["Log CFU (Input)"] = "{:.2f}"
 
-    fmt = {"Confidence": "{:.0%}"} if "Confidence" in disp.columns else {}
-    styler = (
+    # NOTE: st.table preserves Styler colors; st.dataframe ignores Styler.
+    st.table(
         disp.style
-            .applymap(color_pred, subset=["Prediction"])
-            .format(fmt)
-            .set_table_styles(HEADER_STYLE)
+            .apply(style_predictions, axis=1)
+            .format(formatters)
     )
-    # Note: st.table supports Styler; st.dataframe ignores it. Use st.table for styling.
-    st.table(styler)
+
+    st.download_button(
+        "⬇️ Download predictions as CSV",
+        disp.to_csv(index=False).encode("utf-8"),
+        "spoilage_predictions.csv",
+        "text/csv"
+    )
+
 
 # ---------- PERFORMANCE ----------
 with tab_perf:
