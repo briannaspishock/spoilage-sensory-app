@@ -196,124 +196,48 @@ st.session_state["pred_score"] = pred_score
 tab_pred, tab_perf, tab_micro, tab_sens = st.tabs(["🔮 Predictions", "📊 Performance", "🧬 Microbiome", "👃 Sensory"])
 
 # ====== PREDICTIONS ======
-# ====== PREDICTIONS (red/green cells + scroll) ======
+def style_predictions(row):
+    """Apply background colors to Prediction and Confidence columns."""
+    styles = [''] * len(row)
+    pred_val = str(row.get("Prediction", "")).lower()
+    style_str = ''
+    if pred_val in ['not-safe', 'unsafe']:
+        style_str = 'background-color: #fde8e8; color: #9b1c1c; font-weight:600;'
+    elif pred_val in ['safe', 'low risk']:
+        style_str = 'background-color: #e8f5e9; color: #1b5e20; font-weight:600;'
+    try:
+        p_idx = row.index.get_loc('Prediction')
+        styles[p_idx] = style_str
+        if 'Confidence' in row.index:
+            c_idx = row.index.get_loc('Confidence')
+            styles[c_idx] = style_str
+    except KeyError:
+        pass
+    return styles
+
 with tab_pred:
     st.markdown("### 📊 Predictions from your Model")
 
-    # ---- base table ----
     disp = pd.DataFrame({
         "Days in Refrigerator": df_raw.get(DAY_COL, ""),
         "Item": df_raw.get(ITEM_COL, ""),
         "Product Type": df_raw.get(PTYPE_COL, ""),
         "Prediction": pred_class,
-        "Confidence": confidence,  # 0–1
+        "Confidence": confidence,
     })
+    formatters = {"Confidence": "{:.1%}"}
+
     if LOG_CFU_COL in df_raw.columns:
         disp["Log CFU (Input)"] = df_raw[LOG_CFU_COL]
+        formatters["Log CFU (Input)"] = "{:.2f}"
 
-    # ---- controls (optional) ----
-    c1, c2, c3 = st.columns([2, 2, 3], gap="small")
-    with c1:
-        order = st.selectbox(
-            "Order",
-            ["Original order", "Highest risk first", "Lowest risk first"],
-            index=0,
-            help="Sort by model probability of not-safe."
-        )
-    with c2:
-        q = st.text_input("Search item", "", placeholder="Type part of an item name…")
-    with c3:
-        ptype_opts = sorted([str(x) for x in disp["Product Type"].dropna().unique() if str(x).strip()])
-        ptype_pick = st.multiselect("Filter by Product Type", options=ptype_opts, default=[])
+    # Use st.table to preserve Styler cell colors (st.dataframe ignores Styler)
+    st.table(
+        disp.style
+            .apply(style_predictions, axis=1)
+            .format(formatters)
+    )
 
-    # risk scores for sorting
-    scores = st.session_state.get("pred_score", np.zeros(len(disp)))
-    if order == "Highest risk first":
-        disp = disp.iloc[np.argsort(-scores)].reset_index(drop=True)
-    elif order == "Lowest risk first":
-        disp = disp.iloc[np.argsort(scores)].reset_index(drop=True)
-
-    # apply filters
-    mask = np.ones(len(disp), dtype=bool)
-    if q:
-        qq = q.strip().lower()
-        mask &= disp["Item"].astype(str).str.lower().str.contains(qq, na=False)
-    if ptype_pick:
-        mask &= disp["Product Type"].astype(str).isin(ptype_pick)
-    disp = disp.loc[mask].reset_index(drop=True)
-
-    st.write(f"Showing **{len(disp)}** items")
-
-    # ---- HTML table with scroll + colored cells ----
-    def _row_html(row):
-        pred = str(row["Prediction"]).lower()
-        bg = "#e8f5e9" if pred == "safe" else "#fde8e8"
-        fg = "#1b5e20" if pred == "safe" else "#9b1c1c"
-        conf = "" if pd.isna(row["Confidence"]) else f"{row['Confidence']*100:.1f}%"
-        cfu = ""
-        if "Log CFU (Input)" in disp.columns:
-            val = row["Log CFU (Input)"]
-            cfu = "" if pd.isna(val) else f"{float(val):.2f}"
-        cells = [
-            f"<td>{'' if pd.isna(row['Days in Refrigerator']) else row['Days in Refrigerator']}</td>",
-            f"<td>{'' if pd.isna(row['Item']) else row['Item']}</td>",
-            f"<td>{'' if pd.isna(row['Product Type']) else row['Product Type']}</td>",
-            f"<td style='background:{bg};color:{fg};font-weight:600'>{row['Prediction']}</td>",
-            f"<td style='background:{bg};color:{fg};font-weight:600'>{conf}</td>",
-        ]
-        if "Log CFU (Input)" in disp.columns:
-            cells.append(f"<td>{cfu}</td>")
-        return "<tr>" + "".join(cells) + "</tr>"
-
-    headers = ["Days in Refrigerator", "Item", "Product Type", "Prediction", "Confidence"]
-    if "Log CFU (Input)" in disp.columns:
-        headers.append("Log CFU (Input)")
-
-    rows_html = "\n".join(_row_html(r) for _, r in disp.iterrows())
-
-    table_html = f"""
-    <style>
-      .pred-table-wrap {{
-        max-height: 430px;        /* adjust to taste */
-        overflow-y: auto;         /* <-- visible scrollbar */
-        border: 1px solid #f1d7e1;
-        border-radius: 10px;
-        background: #fff9fc;
-      }}
-      table.pred-table {{
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.95rem;
-      }}
-      table.pred-table th, table.pred-table td {{
-        padding: 8px 10px;
-        border-bottom: 1px solid #f5e7ee;
-        text-align: left;
-        color: #4d004d;
-        background: #ffffff;
-      }}
-      table.pred-table thead th {{
-        position: sticky;
-        top: 0;
-        z-index: 1;
-        background: #ffeef8;
-        font-weight: 700;
-      }}
-    </style>
-    <div class="pred-table-wrap">
-      <table class="pred-table">
-        <thead><tr>
-          {''.join(f'<th>{h}</th>' for h in headers)}
-        </tr></thead>
-        <tbody>
-          {rows_html}
-        </tbody>
-      </table>
-    </div>
-    """
-    st.markdown(table_html, unsafe_allow_html=True)
-
-    # ---- download ----
     st.download_button(
         "⬇️ Download predictions as CSV",
         disp.to_csv(index=False).encode("utf-8"),
