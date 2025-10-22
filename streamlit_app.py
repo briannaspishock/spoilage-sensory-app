@@ -15,6 +15,47 @@ from sklearn.metrics import confusion_matrix, classification_report
 
 # ------------------ PAGE STYLE ------------------
 st.set_page_config(page_title="Microbe-Driven Spoilage", page_icon="🥩", layout="wide")
+st.markdown("""
+<style>
+/* Force Streamlit into light mode */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stSidebar"], .stApp {
+  background-color: #fff9fc !important;
+  color: #4d004d !important;
+}
+
+/* Override dark theme elements */
+[data-testid="stSidebar"], [data-testid="stSidebarNav"] {
+  background: #ffeef8 !important;
+  color: #4d004d !important;
+}
+
+[data-testid="stHeader"] {
+  background: #fff9fc !important;
+}
+
+h1,h2,h3,h4,p,span,div {
+  color: #4d004d !important;
+}
+
+/* Fix buttons and scrollbars */
+.stButton>button {
+  background-color: #ffb6c1 !important;
+  color: #4d004d !important;
+  border:none !important;
+  border-radius:12px !important;
+  font-weight:700 !important;
+}
+.stButton>button:hover {
+  background-color: #ffc8d9 !important;
+  color:#000 !important;
+}
+
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-thumb { background-color: #e75480; border-radius: 10px; }
+
+</style>
+""", unsafe_allow_html=True)
+
 st.markdown(
     """
 <style>
