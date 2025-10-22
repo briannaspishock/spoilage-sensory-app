@@ -204,13 +204,32 @@ with tab_pred:
     if LOG_CFU_COL in df_raw.columns:
         disp["Log CFU (Input)"] = df_raw[LOG_CFU_COL]
 
-    st.dataframe(disp.style.format({"Confidence":"{:.1%}"}), use_container_width=True)
-    st.download_button(
-        "⬇️ Download predictions",
-        disp.to_csv(index=False).encode("utf-8"),
-        "spoilage_predictions.csv",
-        "text/csv"
-    )
+# ---- color helpers ----
+def color_pred(val: str):
+    v = str(val).lower()
+    if v in ("unsafe", "not-safe"):
+        return "background-color:#fde8e8; color:#9b1c1c; font-weight:600;"
+    if v in ("safe", "low risk"):
+        return "background-color:#e8f5e9; color:#1b5e20; font-weight:600;"
+    return ""
+
+# optional: header tint to match theme
+HEADER_STYLE = [{"selector": "th",
+                 "props": [("background-color", "#ffeef8"),
+                           ("color", "#4d004d"),
+                           ("font-weight", "700")]}]
+
+fmt = {"Confidence": "{:.0%}"} if "Confidence" in disp.columns else {}
+
+styler = (
+    disp.style
+        .applymap(color_pred, subset=["Prediction"])     # <-- key change
+        .format(fmt)
+        .set_table_styles(HEADER_STYLE)
+)
+
+st.dataframe(styler, use_container_width=True, height=520)
+
 
 # ---------- PERFORMANCE ----------
 with tab_perf:
