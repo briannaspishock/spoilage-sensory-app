@@ -74,7 +74,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("🥩🍖 Microbe-Driven Spoilage + 👃 Sensory")
+st.title("🥩🍖 Microbe-Driven Spoilage")
 
 # ------------------ SIDEBAR ------------------
 with st.sidebar:
