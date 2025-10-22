@@ -391,7 +391,7 @@ with tab_micro:
 # ====== SENSORY ======
 with tab_sens:
     st.markdown("#### 👃 Sensory")
-    st.caption("If the CSV includes sensory columns, they’re plotted directly. Otherwise a generalized early➜late pattern is shown. No safety labels here.")
+    st.caption("If the CSV includes sensory columns, they’re plotted directly. Otherwise a generalized early➜late pattern is shown.")
 
     # Smell guidance (per item) — probability only (no 'safe/not-safe' wording)
     st.markdown("##### 🧭 Smell guidance (per item)")
