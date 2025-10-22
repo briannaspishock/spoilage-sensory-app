@@ -195,9 +195,10 @@ st.session_state["pred_score"] = pred_score
 # ---------------- TABS ----------------
 tab_pred, tab_perf, tab_micro, tab_sens = st.tabs(["🔮 Predictions", "📊 Performance", "🧬 Microbiome", "👃 Sensory"])
 
+# ====== PREDICTIONS ======
 # ====== PREDICTIONS (red/green cells + scroll) ======
 with tab_pred:
-    st.markdown("### 📊 Predictions from RF Model")
+    st.markdown("### 📊 Predictions from your Model")
 
     # ---- base table ----
     disp = pd.DataFrame({
