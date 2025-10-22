@@ -268,104 +268,111 @@ with tab_micro:
             fig_tc.update_layout(xaxis_title="Day", yaxis_title="Mean relative abundance (%)")
             st.plotly_chart(fig_tc, use_container_width=True, key="timecourse")
 
-# ---------- SENSORY (PER-ITEM DROPDOWN) ----------
+# # ---------- SENSORY ----------
 with tab_sens:
-    st.markdown("#### 👃 Sensory")
+    st.markdown("#### 👃 Sensory Profile")
     st.caption(
-        "If your CSV includes sensory columns, we plot them. "
-        "Otherwise we show a generalized early→late pattern.\n\n"
-        "**Use the dropdown below for per-item smell guidance.**"
+        "Pick a view. If your CSV has sensory columns they’re used directly; "
+        "otherwise we show a generalized early→late pattern. Smell guidance is per-item below."
     )
 
-    # A) Per-item smell guidance (dropdown)
-    st.markdown("##### 🧠 Smell guidance (per item)")
-    labels_series = df_raw.get(ITEM_COL, pd.Series(df_raw.index.astype(str), index=df_raw.index))
-    labels = labels_series.astype(str).tolist()
-    selected_label = st.selectbox("Pick a sample", labels, index=0, key="smell_select")
-
-    if ITEM_COL in df_raw.columns:
-        row_idx = df_raw.index[labels_series.astype(str) == selected_label][0]
-    else:
-        row_idx = int(selected_label)
-
-    env = str(df_raw.loc[row_idx].get(PTYPE_COL, ""))
-    p = float(prob_not_safe[row_idx])
-    pred_lbl = "not-safe" if p >= PROB_THR else "safe"
-    guidance = smell_tip(p, env)
-
-    st.markdown(
-        f"""
-<div class="soft-card" style="background:{'#fde8e8' if pred_lbl=='not-safe' else '#e8f5e9'}; 
-                               color:{'#9b1c1c' if pred_lbl=='not-safe' else '#1b5e20'};">
-  <b>{selected_label}</b> — {env or '—'}<br>
-  <span style="font-weight:700;">Prediction:</span> {pred_lbl}<br>
-  <span style="font-weight:700;">Probability (not-safe):</span> {p:.2f}<br>
-  {guidance}
-</div>
-""",
-        unsafe_allow_html=True
+    # Which view?
+    view_choice = st.radio(
+        "View", ["Early vs Late (bar)", "Over time (lines)"],
+        horizontal=True, index=0, key="sens_view"
     )
 
-    # Nudge with actual sensory values if present
-    has_sens_cols = any(c in df_raw.columns for c in SENS_COLS)
-    if has_sens_cols:
-        vals = df_raw.loc[row_idx, [c for c in SENS_COLS if c in df_raw.columns]]
-        if hasattr(vals, "notna") and vals.notna().any():
-            top = vals.sort_values(ascending=False).head(3)
-            st.caption(
-                "Top measured sensory intensities (this sample): " +
-                ", ".join([f"**{k}** {float(v):.2f}" for k, v in top.items()])
+    # Known sensory columns
+    sensory_cols = [c for c in ["Etheral","Fermented","Prickly","Rancid","Sulfurous","Old_cheese"] if c in df_raw.columns]
+    # Day column we already resolved earlier
+    day_col = DAY_COL
+    env_col = PTYPE_COL
+
+    # Helper: make Early/Late label from day
+    def label_stage(days):
+        return np.where(pd.to_numeric(days, errors="coerce").fillna(0) > 7, "Late", "Early")
+
+    # ---------- BAR: Early vs Late ----------
+    if view_choice.startswith("Early"):
+        if sensory_cols and day_col in df_raw.columns:
+            tmp = df_raw.copy()
+            tmp["Stage"] = label_stage(tmp[day_col])
+            # mean per EnvType × Stage × Descriptor
+            melt = tmp.melt(
+                id_vars=[env_col, "Stage"], value_vars=sensory_cols,
+                var_name="Descriptor", value_name="Intensity"
+            ).dropna(subset=["Intensity"])
+            avg = (melt
+                   .groupby([env_col, "Stage", "Descriptor"], as_index=False)["Intensity"]
+                   .mean())
+            # Nice order: Early, Late
+            avg["Stage"] = pd.Categorical(avg["Stage"], categories=["Early","Late"], ordered=True)
+
+            fig_bar = px.bar(
+                avg, x="Descriptor", y="Intensity", color="Stage",
+                barmode="group", facet_col=env_col, category_orders={"Stage":["Early","Late"]},
+                color_discrete_sequence=["#a3c1da", "#e75480"],
+                title="Sensory profile — Early vs Late (mean intensity)"
             )
+            fig_bar.update_layout(
+                xaxis_title="", yaxis_title="Mean intensity",
+                legend_title_text="Stage", bargap=0.25
+            )
+            st.plotly_chart(fig_bar, use_container_width=True, key="sens_bar")
+        else:
+            # generalized bar if no sensory columns
+            trend = pd.DataFrame({
+                "Descriptor":["Etheral","Fermented","Prickly","Rancid","Sulfurous","Old_cheese"],
+                "Early":[0.4,0.35,0.25,0.25,0.15,0.20],
+                "Late":[1.2,1.8,1.5,1.3,0.55,1.0]
+            })
+            df_plot = trend.melt(id_vars="Descriptor", var_name="Stage", value_name="Intensity")
+            fig_bar = px.bar(
+                df_plot, x="Descriptor", y="Intensity", color="Stage",
+                barmode="group", color_discrete_sequence=["#a3c1da", "#e75480"],
+                title="Generalized sensory profile — Early vs Late"
+            )
+            fig_bar.update_layout(xaxis_title="", yaxis_title="Mean intensity", bargap=0.25)
+            st.plotly_chart(fig_bar, use_container_width=True, key="sens_bar_gen")
 
-    st.markdown("---")
-
-    # B) Sensory plots
-    if has_sens_cols and DAY_COL:
-        melt = df_raw.melt(
-            id_vars=[c for c in [PTYPE_COL, DAY_COL] if c in df_raw.columns],
-            value_vars=[c for c in SENS_COLS if c in df_raw.columns],
-            var_name="Descriptor", value_name="Intensity"
-        )
-        if PTYPE_COL in melt.columns:
-            fig = px.line(
-                melt, x=DAY_COL, y="Intensity", color="Descriptor", facet_col=PTYPE_COL,
-                markers=True, color_discrete_sequence=PALETTE,
+    # ---------- LINES: Over time ----------
+    else:
+        if sensory_cols and day_col in df_raw.columns and env_col in df_raw.columns:
+            melt = df_raw.melt(
+                id_vars=[env_col, day_col], value_vars=sensory_cols,
+                var_name="Descriptor", value_name="Intensity"
+            ).dropna(subset=["Intensity"])
+            fig_line = px.line(
+                melt, x=day_col, y="Intensity", color="Descriptor",
+                facet_col=env_col, markers=True,
+                color_discrete_sequence=["#a3c1da","#e75480","#a8c69f","#f4c2c2","#c3b1e1","#d5b4ab"],
                 title="Sensory intensity over time (by product type)"
             )
+            fig_line.update_layout(xaxis_title="Day", yaxis_title="Intensity")
+            st.plotly_chart(fig_line, use_container_width=True, key="sens_lines")
         else:
-            fig = px.line(
-                melt, x=DAY_COL, y="Intensity", color="Descriptor",
-                markers=True, color_discrete_sequence=PALETTE,
-                title="Sensory intensity over time"
-            )
-        st.plotly_chart(fig, use_container_width=True, key="sens_time")
-    else:
-        # Generalized early vs late bar chart
-        trend = pd.DataFrame({
-            "Descriptor":["Etheral","Fermented","Prickly","Rancid","Sulfurous","Old_cheese"],
-            "Early":[0.4,0.3,0.2,0.2,0.1,0.2],
-            "Late":[1.2,1.8,1.5,1.3,0.5,1.0],
-        })
-        df_plot = trend.melt(id_vars="Descriptor", var_name="Stage", value_name="Intensity")
-        fig = px.bar(
-            df_plot, x="Descriptor", y="Intensity", color="Stage",
-            barmode="group", color_discrete_sequence=["#a3c1da","#e75480"],
-            title="Generalized sensory profile (Early vs Late)"
-        )
-        st.plotly_chart(fig, use_container_width=True, key="sens_general")
+            st.info("No sensory columns found to render a time series.")
 
-    # C) (Optional) Batch guidance (collapsed)
+    # ---------- Smell guidance (per-item dropdown) ----------
+    st.markdown("##### 🧭 Smell guidance (per item)")
+    # simple rule set driven by model probability (pred_score)
+    def guidance_from_prob(p):
+        if p >= 0.80: return "⚠️ High risk — watch for **fermented**, **rancid**, **cheesy**, or **sulfurous** notes."
+        if p >= 0.50: return "⚠️ Elevated risk — **fermented** / **rancid** may emerge soon."
+        return "🧊 Low risk — expect faint **sweet/ethereal**, mild **fermented** aroma."
+
+    item_labels = df_raw.get(ITEM_COL, df_raw.index.astype(str)).astype(str).tolist()
+    pick = st.selectbox("Choose an item", item_labels, index=0, key="smell_pick")
+    idx = df_raw.index[df_raw.get(ITEM_COL, df_raw.index).astype(str) == pick][0]
+    st.write(guidance_from_prob(float(pred_score[idx])))
+
+    # Optional: table of all items, collapsed by default
     with st.expander("Show smell guidance for all items"):
-        rows = []
-        for i, lbl in enumerate(labels):
-            env_i = str(df_raw.iloc[i].get(PTYPE_COL, ""))
-            p_i = float(prob_not_safe[i])
-            pred_i = "not-safe" if p_i >= PROB_THR else "safe"
-            rows.append({
-                "Item": lbl,
-                "Product Type": env_i,
-                "Prediction": pred_i,
-                "Prob (not-safe)": round(p_i, 3),
-                "Guidance": smell_tip(p_i, env_i)
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=320)
+        dd = pd.DataFrame({
+            "Item": df_raw.get(ITEM_COL, ""),
+            "Product Type": df_raw.get(PTYPE_COL, ""),
+            "Prediction": np.where(pred_score >= 0.50, "not-safe", "safe"),
+            "Prob (not-safe)": np.round(pred_score, 3),
+            "Guidance": [guidance_from_prob(p) for p in pred_score]
+        })
+        st.dataframe(dd, use_container_width=True)
