@@ -166,6 +166,30 @@ confidence = np.clip(np.nan_to_num(np.where(pred_class == "safe", safe_conf, not
 tab_pred, tab_perf, tab_micro, tab_sens = st.tabs(["🔮 Predictions", "📊 Performance", "🧬 Microbiome", "👃 Sensory"])
 
 # ---------- PREDICTIONS ----------
+def style_predictions(row):
+    """Apply background colors to Prediction and Confidence columns."""
+    styles = [''] * len(row)
+    pred_val = row.get("Prediction", "")
+    
+    if pred_val.lower() in ["unsafe", "not-safe"]:
+        style_str = 'background-color: #fde8e8; color: #9b1c1c; font-weight:600;'
+    elif pred_val.lower() in ["safe", "low risk"]:
+        style_str = 'background-color: #e8f5e9; color: #1b5e20; font-weight:600;'
+    else:
+        style_str = ''
+
+    try:
+        pred_idx = row.index.get_loc('Prediction')
+        styles[pred_idx] = style_str
+        if 'Confidence' in row.index:
+            conf_idx = row.index.get_loc('Confidence')
+            styles[conf_idx] = style_str
+    except KeyError:
+        pass
+    
+    return styles
+
+
 with tab_pred:
     st.markdown("#### 🔍 Predictions")
     st.caption("Classification of each uploaded sample as *safe* or *not-safe* with confidence (threshold 0.50).")
