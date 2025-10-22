@@ -87,7 +87,7 @@ with st.sidebar:
         help="Must contain rf_model_tuned.joblib, model_meta.json, rf_feature_importances.csv",
     )
 
-    st.markdown("**Upload CSV (same schema as model training)**")
+    st.markdown("**Upload CSV**")
     csv_file = st.file_uploader(" ", type=["csv"])
 
     st.markdown("### ⚙️ Settings")
