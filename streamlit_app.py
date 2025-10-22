@@ -234,22 +234,6 @@ with tab_sens:
     st.markdown("#### 👃 Sensory")
     st.caption("If the CSV includes sensory columns, they’re plotted directly. Otherwise a generalized early➜late pattern is shown.")
 
-    # 1) If real sensory is present, show time trend facet by product type
-    if SENSORY_COLS and DAY_COL:
-        melted = df_raw.melt(
-            id_vars=[c for c in [PTYPE_COL, DAY_COL] if c in df_raw.columns],
-            value_vars=SENSORY_COLS,
-            var_name="Descriptor",
-            value_name="Intensity",
-        )
-        fig_line = px.line(
-            melted, x=DAY_COL, y="Intensity", color="Descriptor",
-            facet_col=PTYPE_COL if PTYPE_COL in df_raw.columns else None,
-            markers=True, color_discrete_sequence=PALETTE,
-            title="Sensory intensity over time (by product type)"
-        )
-        st.plotly_chart(fig_line, use_container_width=True)
-
     # 2) Always show an Early vs Late bar (generalized template)
     st.markdown("##### Early vs Late (generalized)")
     # these are your clean, readable example profiles
