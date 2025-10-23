@@ -412,7 +412,8 @@
     "[Ruminococcus] gauvreauii group",
     "[Ruminococcus] torques group",
     "endosymbionts",
-    "uncultured"
+    "uncultured",
+    "meat_type"
   ],
   "threshold_cfu": 7.0
 }
